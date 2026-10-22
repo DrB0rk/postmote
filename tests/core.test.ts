@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { chmod, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -133,6 +133,84 @@ describe("mail transport checks", () => {
       expect(result.message).not.toContain("test-user");
     }
   }, 15000);
+});
+
+describe("release installer", () => {
+  test("downloads, verifies, installs, and preserves the current app after a bad checksum", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "postmote-installer-test-"));
+    if (process.platform === "win32") {
+      const installDir = join(dir, "installed app");
+      const server = Bun.serve({
+        hostname: "127.0.0.1",
+        port: 0,
+        fetch(request) {
+          if (new URL(request.url).pathname === "/checksums.txt") return new Response(`${"0".repeat(64)}  postmote-windows-x64.exe\n`);
+          return new Response("untrusted binary");
+        },
+      });
+      try {
+        await mkdir(installDir, { recursive: true });
+        await Bun.write(join(installDir, "postmote.exe"), "existing installation");
+        const child = Bun.spawn(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/install.ps1"], {
+          env: { ...process.env, POSTMOTE_INSTALL_DIR: installDir, POSTMOTE_RELEASE_BASE_URL: `http://127.0.0.1:${server.port}` },
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        const [stdout, stderr, exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+        expect(exitCode).not.toBe(0);
+        expect(stdout + stderr).toContain("Checksum verification failed");
+        expect(await Bun.file(join(installDir, "postmote.exe")).text()).toBe("existing installation");
+      } finally {
+        server.stop(true);
+        await rm(dir, { recursive: true, force: true });
+      }
+      return;
+    }
+    let binary = Buffer.from("#!/bin/sh\nprintf 'postmote test-install\\n'\n");
+    let badChecksum = false;
+    const platform = process.platform === "darwin" ? "macos" : "linux";
+    const arch = process.arch === "arm64" ? "arm64" : "x64";
+    const asset = `postmote-${platform}-${arch}`;
+    const server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(request) {
+        const path = new URL(request.url).pathname;
+        if (path === `/${asset}`) return new Response(binary);
+        if (path === "/checksums.txt") {
+          const hash = badChecksum ? "0".repeat(64) : createHash("sha256").update(binary).digest("hex");
+          return new Response(`${hash}  ${asset}\n`);
+        }
+        return new Response("Not found", { status: 404 });
+      },
+    });
+    const installDir = join(dir, "bin with spaces");
+    const invoke = async () => {
+      const child = Bun.spawn(["sh", "scripts/install.sh"], {
+        env: { ...process.env, POSTMOTE_INSTALL_DIR: installDir, POSTMOTE_RELEASE_BASE_URL: `http://127.0.0.1:${server.port}` },
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [stdout, stderr, exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+      return { stdout, stderr, exitCode };
+    };
+    try {
+      const first = await invoke();
+      expect(first.exitCode).toBe(0);
+      expect(first.stdout).toContain("SHA-256 checksum verified");
+      expect(await Bun.file(join(installDir, "postmote")).text()).toContain("test-install");
+
+      binary = Buffer.from("#!/bin/sh\nprintf 'postmote compromised\\n'\n");
+      badChecksum = true;
+      const second = await invoke();
+      expect(second.exitCode).toBe(1);
+      expect(second.stdout + second.stderr).toContain("Checksum verification failed");
+      expect(await Bun.file(join(installDir, "postmote")).text()).toContain("test-install");
+    } finally {
+      server.stop(true);
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 30000);
 });
 
 describe("agent authorization and MCP", () => {

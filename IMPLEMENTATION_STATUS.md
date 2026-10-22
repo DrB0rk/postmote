@@ -9,8 +9,8 @@ This file tracks progress against `POSTMOTE_IMPLEMENTATION_PLAN.md`.
 | P2 Approval system | Not started | No draft or approval workflow. |
 | P3 MCP API | Partial | Official SDK v2 HTTP handler, scoped agent bearer auth and revocation, `mail_accounts`, and `mail_status`. No mail operations, resources, prompts, or stdio bridge. |
 | P4 UI and operations | Partial | `init`, `serve`, `doctor`, `config show`, self-contained owner setup/login/mailbox/agent/grant dashboard, mailbox connection tests, token rotation, and revoke. Polling, grant editing UI, approvals UI, and other CLI operations absent. |
-| P5 QA and release | Not started | No release matrix, integration suite, or benchmarks. |
+| P5 QA and release | Partial | End-to-end owner/MCP and installer tests, compiled executable smoke check, checksum-verified installers, and a tag-triggered release matrix for Linux/macOS/Windows. No versioned binary release has been published yet. |
 
 ## Next actionable task
 
-Implement IMAP folder listing and bounded message metadata/body reads using the verified ImapFlow API; add MIME parsing and permission-isolation tests before exposing message-reading MCP tools.
+Publish the first versioned release to activate the download installers, then implement IMAP folder listing and bounded message metadata/body reads using the verified ImapFlow API; add MIME parsing and permission-isolation tests before exposing message-reading MCP tools.

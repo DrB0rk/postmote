@@ -6,7 +6,26 @@ Postmote is an early implementation of a local IMAP/SMTP bridge. The current rel
 
 ## Requirements
 
-- Bun 1.4 or newer
+- End users can install a compiled executable without Bun or Node.js.
+- Bun 1.4 or newer is needed only to run from source.
+
+## Install
+
+On Linux or macOS, install the latest verified release with:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/DrB0rk/postmote/main/scripts/install.sh | sh
+```
+
+The installer detects Linux/macOS and x64/ARM64, verifies the downloaded binary against the release SHA-256 list, then installs it to `~/.local/bin`. To choose a different directory, set `POSTMOTE_INSTALL_DIR` before running the command. If that directory is not on your `PATH`, the installer prints the command to add it.
+
+On Windows PowerShell, run:
+
+```powershell
+irm https://raw.githubusercontent.com/DrB0rk/postmote/main/scripts/install.ps1 | iex
+```
+
+Windows installs to `%USERPROFILE%\.local\bin`. Releases are built for Linux x64/ARM64, macOS x64/ARM64, and Windows x64. New downloadable releases are published when a `v*` version tag is pushed.
 
 ## Run from source
 
