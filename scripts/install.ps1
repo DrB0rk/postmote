@@ -6,11 +6,11 @@ $Asset = 'postmote-windows-x64.exe'
 $TempDir = Join-Path ([System.IO.Path]::GetTempPath()) ([System.Guid]::NewGuid().ToString('N'))
 $StagePath = $null
 
-function Write-Step([string]$Message) { Write-Host "  › $Message" -ForegroundColor Cyan }
-function Write-Ok([string]$Message) { Write-Host "  ✓ $Message" -ForegroundColor Green }
-function Stop-Install([string]$Message) { Write-Host "  ✗ $Message" -ForegroundColor Red; exit 1 }
+function Write-Step([string]$Message) { Write-Host "  > $Message" -ForegroundColor Cyan }
+function Write-Ok([string]$Message) { Write-Host "  [OK] $Message" -ForegroundColor Green }
+function Stop-Install([string]$Message) { Write-Host "  [FAIL] $Message" -ForegroundColor Red; exit 1 }
 
-Write-Host "`n  POSTMOTE  ────────────────────────────" -ForegroundColor Cyan
+Write-Host "`n  POSTMOTE  ----------------------------" -ForegroundColor Cyan
 Write-Host '  Local mail bridge installer' -ForegroundColor DarkGray
 Write-Step 'Platform  Windows / x64'
 Write-Step 'Download  latest verified release'
