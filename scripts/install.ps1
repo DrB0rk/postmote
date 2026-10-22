@@ -27,7 +27,10 @@ try {
   $ChecksumLine = Get-Content $ChecksumsPath | Where-Object { $_ -match "^[0-9a-fA-F]{64}\s+$([regex]::Escape($Asset))$" } | Select-Object -First 1
   if (!$ChecksumLine) { Stop-Install "No checksum was published for $Asset." }
   $Expected = ($ChecksumLine -split '\s+')[0].ToLowerInvariant()
-  $Actual = (Get-FileHash -Path $BinaryPath -Algorithm SHA256).Hash.ToLowerInvariant()
+  $Sha256 = [System.Security.Cryptography.SHA256]::Create()
+  try {
+    $Actual = [System.BitConverter]::ToString($Sha256.ComputeHash([System.IO.File]::ReadAllBytes($BinaryPath))).Replace('-', '').ToLowerInvariant()
+  } finally { $Sha256.Dispose() }
   if ($Actual -ne $Expected) { Stop-Install 'Checksum verification failed. The existing installation was left untouched.' }
   Write-Ok 'SHA-256 checksum verified'
 
