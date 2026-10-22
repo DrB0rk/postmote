@@ -13,6 +13,7 @@
     "build": "bun build ./src/main.ts --compile --minify --outfile dist/postmote"
   },
   "dependencies": {
+    "@modelcontextprotocol/server": "2.3.1",
     "hono": "^4.10.4",
     "zod": "^4.1.12"
   },
