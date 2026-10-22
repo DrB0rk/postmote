@@ -6,10 +6,12 @@ const scrypt = promisify(scryptCb);
 
 export async function ensureMasterKey(dataDir: string): Promise<void> {
   await mkdir(dataDir, { recursive: true, mode: 0o700 });
+  if (process.platform !== "win32") await chmod(dataDir, 0o700);
   const path = join(dataDir, "master.key");
   try {
     const key = await readFile(path);
     if (key.length !== 32) throw new Error("Master key file has invalid length");
+    if (process.platform !== "win32") await chmod(path, 0o600);
     return;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;

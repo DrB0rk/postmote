@@ -39,6 +39,16 @@ export async function openDatabase(dataDir: string): Promise<Database> {
   try {
     db.exec(schema);
     db.query("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(1, ?)").run(new Date().toISOString());
+    const version = db.query("SELECT MAX(version) AS version FROM schema_migrations").get() as { version: number };
+    if (version.version < 2) {
+      db.exec(`ALTER TABLE mailboxes ADD COLUMN sender_name TEXT NOT NULL DEFAULT '';
+        ALTER TABLE mailboxes ADD COLUMN sender_email TEXT;
+        ALTER TABLE mailboxes ADD COLUMN smtp_username TEXT;
+        ALTER TABLE mailboxes ADD COLUMN smtp_enabled INTEGER NOT NULL DEFAULT 1;
+        ALTER TABLE mailboxes ADD COLUMN mailbox_root TEXT;
+        UPDATE mailboxes SET smtp_enabled = CASE WHEN smtp_host IS NULL THEN 0 ELSE 1 END;
+        INSERT INTO schema_migrations(version, applied_at) VALUES(2, '${new Date().toISOString()}');`);
+    }
     db.exec("COMMIT;");
   } catch (error) {
     db.exec("ROLLBACK;");
@@ -46,6 +56,13 @@ export async function openDatabase(dataDir: string): Promise<Database> {
     throw error;
   }
   const dbPath = join(dataDir, "postmote.db");
-  if (process.platform !== "win32") await chmod(dbPath, 0o600);
+  if (process.platform !== "win32") {
+    await chmod(dbPath, 0o600);
+    for (const suffix of ["-wal", "-shm"]) {
+      try { await chmod(dbPath + suffix, 0o600); } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+    }
+  }
   return db;
 }
