@@ -1,0 +1,24 @@
+{
+  "name": "postmote",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "description": "A local-first mailbox bridge for coding agents",
+  "license": "UNLICENSED",
+  "scripts": {
+    "dev": "bun --watch src/main.ts",
+    "start": "bun src/main.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "build": "bun build ./src/main.ts --compile --minify --outfile dist/postmote"
+  },
+  "dependencies": {
+    "hono": "^4.10.4",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.22",
+    "@types/node": "^24.7.2",
+    "typescript": "^5.9.3"
+  }
+}
