@@ -34,14 +34,33 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.4.2
+      - name: Install NSS test tools
+        if: matrix.asset == 'linux-x64'
+        run: sudo apt-get update -qq && sudo apt-get install -y libnss3-tools libnss3-dev pkg-config
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
       - run: bun test
       - run: bun run build
+      - name: Exercise compiled stdio transport
+        shell: bash
+        run: POSTMOTE_TEST_BINARY="$PWD/dist/${{ matrix.executable }}" bun test tests/stdio.test.ts
+      - name: Exercise compiled Thunderbird password import
+        if: matrix.asset == 'linux-x64'
+        shell: bash
+        run: POSTMOTE_TEST_BINARY="$PWD/dist/${{ matrix.executable }}" bun test tests/thunderbird-credentials.test.ts
+      - name: Exercise compiled mail transports
+        if: matrix.asset == 'linux-x64'
+        shell: bash
+        run: POSTMOTE_TEST_BINARY="$PWD/dist/${{ matrix.executable }}" sh scripts/test-mail-integration.sh
+      - name: Audit dependencies
+        if: matrix.asset == 'linux-x64'
+        run: bun audit
       - name: Verify executable and stage release asset
         shell: bash
         run: |
-          ./dist/${{ matrix.executable }} --version
+          expected="postmote ${GITHUB_REF_NAME#v}"
+          actual="$(./dist/${{ matrix.executable }} --version)"
+          if [ "$actual" != "$expected" ]; then echo "Version mismatch: expected $expected, got $actual" >&2; exit 1; fi
           mkdir -p release-assets
           cp "dist/${{ matrix.executable }}" "release-assets/postmote-${{ matrix.asset }}"
       - uses: actions/upload-artifact@v4
@@ -64,9 +83,15 @@ jobs:
           pattern: postmote-*
           path: release-assets
           merge-multiple: true
-      - name: Create checksums
-        run: cd release-assets && sha256sum postmote-* > checksums.txt
+      - name: Verify release artifacts and create checksums
+        shell: bash
+        run: |
+          cd release-assets
+          for asset in postmote-linux-x64 postmote-linux-arm64 postmote-macos-x64 postmote-macos-arm64 postmote-windows-x64.exe; do
+            test -s "$asset" || { echo "Missing release asset: $asset" >&2; exit 1; }
+          done
+          sha256sum postmote-linux-x64 postmote-linux-arm64 postmote-macos-x64 postmote-macos-arm64 postmote-windows-x64.exe > checksums.txt
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" release-assets/* --generate-notes --title "$GITHUB_REF_NAME"
+        run: gh release create "$GITHUB_REF_NAME" release-assets/* --notes-file RELEASE_NOTES.md --title "$GITHUB_REF_NAME"

@@ -49,6 +49,31 @@ export async function openDatabase(dataDir: string): Promise<Database> {
         UPDATE mailboxes SET smtp_enabled = CASE WHEN smtp_host IS NULL THEN 0 ELSE 1 END;
         INSERT INTO schema_migrations(version, applied_at) VALUES(2, '${new Date().toISOString()}');`);
     }
+    if (version.version < 3) {
+      db.exec(`CREATE TABLE IF NOT EXISTS mailbox_poll_locks (mailbox_id TEXT PRIMARY KEY REFERENCES mailboxes(id) ON DELETE CASCADE, owner TEXT NOT NULL, expires_at INTEGER NOT NULL);`);
+      db.query("INSERT INTO schema_migrations(version,applied_at) VALUES(3,?)").run(new Date().toISOString());
+    }
+    if (version.version < 4) {
+      db.exec("CREATE TABLE IF NOT EXISTS owner_settings (id INTEGER PRIMARY KEY CHECK(id=1), personal_email TEXT)");
+      db.query("INSERT OR IGNORE INTO owner_settings(id,personal_email) VALUES(1,NULL)").run();
+      db.query("INSERT INTO schema_migrations(version,applied_at) VALUES(4,?)").run(new Date().toISOString());
+    }
+    if (version.version < 5) {
+      db.exec("CREATE TABLE IF NOT EXISTS agent_inboxes (agent_id TEXT PRIMARY KEY REFERENCES agents(id) ON DELETE CASCADE, mailbox_id TEXT NOT NULL UNIQUE REFERENCES mailboxes(id) ON DELETE CASCADE, created_at TEXT NOT NULL)");
+      db.query("INSERT INTO schema_migrations(version,applied_at) VALUES(5,?)").run(new Date().toISOString());
+    }
+    if (version.version < 6) {
+      db.exec("ALTER TABLE send_requests ADD COLUMN sending_owner TEXT; ALTER TABLE send_requests ADD COLUMN sending_lease_expires_at INTEGER; ALTER TABLE send_requests ADD COLUMN sending_origin TEXT;");
+      db.query("INSERT INTO schema_migrations(version,applied_at) VALUES(6,?)").run(new Date().toISOString());
+    }
+    if (version.version < 7) {
+      db.exec("ALTER TABLE owner_settings ADD COLUMN max_sends_per_hour INTEGER NOT NULL DEFAULT 30 CHECK(max_sends_per_hour BETWEEN 1 AND 1000)");
+      db.query("INSERT INTO schema_migrations(version,applied_at) VALUES(7,?)").run(new Date().toISOString());
+    }
+    if (version.version < 8) {
+      db.exec("ALTER TABLE agents ADD COLUMN allow_inbox_setup INTEGER NOT NULL DEFAULT 0 CHECK(allow_inbox_setup IN (0,1))");
+      db.query("INSERT INTO schema_migrations(version,applied_at) VALUES(8,?)").run(new Date().toISOString());
+    }
     db.exec("COMMIT;");
   } catch (error) {
     db.exec("ROLLBACK;");

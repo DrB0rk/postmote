@@ -11,6 +11,7 @@ import { openDatabase } from "../src/db.ts";
 import { mailboxInputSchema } from "../src/mailbox.ts";
 import { decryptSecret, encryptSecret, ensureMasterKey, hashOwnerPassword, verifyOwnerPassword } from "../src/vault.ts";
 import { authenticateAgentToken, createAgentMcpHandler } from "../src/mcp.ts";
+import { recoverInterruptedDeliveries } from "../src/mail/outbox.ts";
 import { acquireDaemonLock } from "../src/daemon-lock.ts";
 import { testImapConnection, testSmtpConnection } from "../src/mail/connections.ts";
 
@@ -56,6 +57,8 @@ describe("local persistence and vault", () => {
       const cipher = await encryptSecret(dir, "mailbox-a", "p@ss word");
       expect(cipher).not.toContain("p@ss word");
       expect(await decryptSecret(dir, "mailbox-a", cipher)).toBe("p@ss word");
+      const emptyCipher = await encryptSecret(dir, "mailbox-a", "");
+      expect(await decryptSecret(dir, "mailbox-a", emptyCipher)).toBe("");
       await expect(decryptSecret(dir, "mailbox-b", cipher)).rejects.toThrow();
       const key = await readFile(join(dir, "master.key"));
       expect(key).toHaveLength(32);
@@ -70,7 +73,7 @@ describe("local persistence and vault", () => {
       expect(await verifyOwnerPassword("long enough test password", hash)).toBe(true);
       expect(await verifyOwnerPassword("wrong password", hash)).toBe(false);
       const db = await openDatabase(dir);
-      expect(db.query("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({ version: 2 });
+      expect(db.query("SELECT MAX(version) AS version FROM schema_migrations").get()).toEqual({ version: 8 });
       if (process.platform !== "win32") expect((await stat(join(dir, "postmote.db"))).mode & 0o777).toBe(0o600);
       db.close();
     } finally { await rm(dir, { recursive: true, force: true }); }
@@ -98,6 +101,34 @@ describe("local persistence and vault", () => {
       ]);
       db.close();
     } finally { await rm(dir, { recursive: true, force: true }); }
+  });
+});
+
+describe("outbox crash recovery", () => {
+  test("marks interrupted deliveries unknown without replaying them", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "postmote-recovery-"));
+    const db = await openDatabase(dir);
+    try {
+      const now = new Date().toISOString();
+      db.query("INSERT INTO mailboxes(id,label,email,imap_host,imap_port,imap_security,username,encrypted_secret,poll_seconds,created_at,updated_at) VALUES('box','Box','test@example.test','localhost',993,'tls','test','cipher',120,?,?)").run(now, now);
+      for (const state of ["sending", "pending", "sent"]) {
+        db.query("INSERT INTO drafts(id,mailbox_id,mime_fields_json,encrypted_body,revision,created_at,updated_at) VALUES(?,'box','{}','cipher',1,?,?)").run(`draft-${state}`, now, now);
+        db.query("INSERT INTO send_requests(id,mailbox_id,draft_id,draft_revision,state,approval_expires_at,idempotency_key,created_at,updated_at) VALUES(?,'box',?,1,?,?,?, ?,?)").run(state, `draft-${state}`, state, now, state, now, now);
+      }
+      expect(recoverInterruptedDeliveries(db, now)).toBe(1);
+      expect(db.query("SELECT id,state FROM send_requests ORDER BY id").all()).toEqual([{ id: "pending", state: "pending" }, { id: "sending", state: "delivery_unknown" }, { id: "sent", state: "sent" }]);
+      expect(recoverInterruptedDeliveries(db, now)).toBe(0);
+      for (const origin of ["owner","agent"]) {
+        db.query("INSERT INTO drafts(id,mailbox_id,mime_fields_json,encrypted_body,revision,created_at,updated_at) VALUES(?,'box','{}','cipher',1,?,?)").run(`lease-draft-${origin}`,now,now);
+        db.query("INSERT INTO send_requests(id,mailbox_id,draft_id,draft_revision,state,approval_expires_at,idempotency_key,created_at,updated_at,sending_owner,sending_lease_expires_at,sending_origin) VALUES(?,'box',?,1,'sending',?,?,?,?, 'active',?,?)").run(`lease-${origin}`,`lease-draft-${origin}`,now,`lease-key-${origin}`,now,now,Date.parse(now)+60000,origin);
+      }
+      expect(recoverInterruptedDeliveries(db,now,true)).toBe(1);
+      expect(db.query("SELECT state FROM send_requests WHERE id='lease-agent'").get()).toEqual({state:"sending"});
+      expect(db.query("SELECT state FROM send_requests WHERE id='lease-owner'").get()).toEqual({state:"delivery_unknown"});
+      expect(recoverInterruptedDeliveries(db,new Date(Date.parse(now)+60001).toISOString())).toBe(1);
+      expect(db.query("SELECT state FROM send_requests WHERE id='lease-agent'").get()).toEqual({state:"delivery_unknown"});
+
+    } finally { db.close(); await rm(dir, { recursive: true, force: true }); }
   });
 });
 
@@ -206,6 +237,13 @@ describe("release installer", () => {
       expect(second.exitCode).toBe(1);
       expect(second.stdout + second.stderr).toContain("Checksum verification failed");
       expect(await Bun.file(join(installDir, "postmote")).text()).toContain("test-install");
+
+      binary = Buffer.from("#!/bin/sh\nexit 1\n");
+      badChecksum = false;
+      const third = await invoke();
+      expect(third.exitCode).toBe(1);
+      expect(third.stdout + third.stderr).toContain("did not start");
+      expect(await Bun.file(join(installDir, "postmote")).text()).toContain("test-install");
     } finally {
       server.stop(true);
       await rm(dir, { recursive: true, force: true });
@@ -280,6 +318,8 @@ describe("owner and HTTP integration", () => {
         } catch { await Bun.sleep(50); }
       }
       expect(healthy).toBe(true);
+      const tooLarge = await fetch(base + "/api/setup/initialize", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ password: "x".repeat(262144) }) });
+      expect(tooLarge.status).toBe(413);
       const dashboard = await fetch(base + "/");
       const dashboardHtml = await dashboard.text();
       expect(dashboard.status).toBe(200);
@@ -292,6 +332,11 @@ describe("owner and HTTP integration", () => {
       const cookie = login.response.headers.get("set-cookie");
       expect(cookie).toContain("postmote_session=");
       const headers = { cookie: cookie!, "content-type": "application/json" };
+      expect((await request("/api/settings")).response.status).toBe(401);
+      const personal = await request("/api/settings",{method:"PUT",headers,body:JSON.stringify({personalEmail:"berk@berkderooij.nl"})});
+      expect(personal.body.personalEmail).toBe("berk@berkderooij.nl");
+      expect((await request("/api/settings",{headers:{cookie:cookie!}})).body.personalEmail).toBe("berk@berkderooij.nl");
+      expect((await request("/api/settings",{method:"PUT",headers,body:JSON.stringify({personalEmail:"not-an-email"})})).response.status).toBe(400);
       const mailbox = await request("/api/mailboxes", { method: "POST", headers, body: JSON.stringify({ email: "test@example.test", imapHost: "mail.example.test", username: "test-user", password: "imap-test-secret", smtpEnabled: false }) });
       expect(mailbox.response.status).toBe(201);
       const agent = await request("/api/agents", { method: "POST", headers, body: JSON.stringify({ label: "Integration agent" }) });
@@ -305,6 +350,44 @@ describe("owner and HTTP integration", () => {
       expect(result).not.toContain("imap-test-secret");
       const grants = await request(`/api/agents/${agentData.id}/grants`, { headers: { cookie: cookie! } });
       expect(grants.body.grants).toEqual([{ mailboxId: mailbox.body.id, capability: "mail.read" }]);
+      const outgoing = await request("/api/mailboxes", { method: "POST", headers, body: JSON.stringify({ email: "sender@example.test", imapHost: "mail.example.test", username: "test-user", password: "secret", smtpEnabled: true, smtpHost: "smtp.example.test", smtpPort: 465, smtpSecurity: "tls", smtpUsername: "test-user", smtpPassword: "secret" }) });
+      expect(outgoing.response.status).toBe(201);
+      await request(`/api/agents/${agentData.id}/grants`, { method: "PUT", headers, body: JSON.stringify({ grants: [{ mailboxId: outgoing.body.id, capabilities: ["mail.send.request"] }] }) });
+      const sendRequest = await fetch(base + "/mcp", { method: "POST", headers: { authorization: `Bearer ${agentData.token}`, "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "mail_send_request", arguments: { mailboxId: outgoing.body.id, to: "berk@berkderooij.nl", subject: "test", text: "test", idempotencyKey: "test-request-1" } } }) });
+      const sendText = await sendRequest.text();
+      const sendResult = JSON.parse(sendText.startsWith("event:") ? sendText.split("\n").find(line => line.startsWith("data:"))!.slice(5) : sendText) as { result: { structuredContent: { requestId: string; state: string } } };
+      expect(sendResult.result.structuredContent.state).toBe("pending");
+      const requestId = sendResult.result.structuredContent.requestId;
+      const replayRequest = async (subject: string) => {
+        const response = await fetch(base + "/mcp", { method: "POST", headers: { authorization: `Bearer ${agentData.token}`, "content-type": "application/json", accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "mail_send_request", arguments: { mailboxId: outgoing.body.id, to: "berk@berkderooij.nl", subject, text: "test", idempotencyKey: "test-request-1" } } }) });
+        const content = await response.text();
+        return JSON.parse(content.startsWith("event:") ? content.split("\n").find(line => line.startsWith("data:"))!.slice(5) : content);
+      };
+      expect((await replayRequest("test")).result.structuredContent.requestId).toBe(requestId);
+      const conflict = await replayRequest("different");
+      expect(conflict.result.isError).toBe(true);
+      expect(JSON.stringify(conflict)).toContain("IDEMPOTENCY_CONFLICT");
+      const unauthorizedApproval = await request(`/api/send-requests/${requestId}/approve`, { method: "POST", headers: { authorization: `Bearer ${agentData.token}` } });
+      expect(unauthorizedApproval.response.status).toBe(401);
+      const queue = await request("/api/send-requests", { headers: { cookie: cookie! } });
+      expect(queue.body.requests).toMatchObject([{ id: requestId, to: "berk@berkderooij.nl", subject: "test", text: "test" }]);
+      const reviewHash = (queue.body.requests as { reviewHash: string }[])[0]!.reviewHash;
+      const inspectDb = new Database(join(dir, "postmote.db"));
+      const original = inspectDb.query("SELECT d.id,d.mime_fields_json FROM drafts d JOIN send_requests r ON r.draft_id=d.id WHERE r.id=?").get(requestId) as { id: string; mime_fields_json: string };
+      inspectDb.query("UPDATE drafts SET mime_fields_json=? WHERE id=?").run(JSON.stringify({ to: "berk@berkderooij.nl", subject: "changed" }), original.id);
+      const stale = await request(`/api/send-requests/${requestId}/approve`, { method: "POST", headers, body: JSON.stringify({ reviewHash }) });
+      expect(stale.response.status).toBe(409);
+      inspectDb.query("UPDATE mailboxes SET sender_name='Altered sender' WHERE id=?").run(outgoing.body.id as string);
+      inspectDb.query("UPDATE drafts SET mime_fields_json=? WHERE id=?").run(original.mime_fields_json, original.id);
+      const changedSender = await request(`/api/send-requests/${requestId}/approve`, { method: "POST", headers, body: JSON.stringify({ reviewHash }) });
+      expect(changedSender.response.status).toBe(409);
+      inspectDb.query("UPDATE mailboxes SET sender_name='' WHERE id=?").run(outgoing.body.id as string);
+      inspectDb.query("UPDATE drafts SET mime_fields_json=? WHERE id=?").run(original.mime_fields_json, original.id);
+      inspectDb.close();
+      const rejected = await request(`/api/send-requests/${requestId}/reject`, { method: "POST", headers });
+      expect(rejected.body.state).toBe("rejected");
+      const repeat = await request(`/api/send-requests/${requestId}/approve`, { method: "POST", headers });
+      expect(repeat.response.status).toBe(409);
       const rotation = await request(`/api/agents/${agentData.id}/rotate-token`, { method: "POST", headers: { cookie: cookie! } });
       expect(typeof rotation.body.token).toBe("string");
       const oldToken = await fetch(base + "/mcp", { method: "POST", headers: { authorization: `Bearer ${agentData.token}`, "content-type": "application/json" }, body: "{}" });
@@ -317,4 +400,29 @@ describe("owner and HTTP integration", () => {
       await rm(dir, { recursive: true, force: true });
     }
   }, 15000);
+});
+
+describe("Thunderbird profile import", () => {
+  test("extracts IMAP and SMTP settings without executing preferences", async () => {
+    const { accountsFromPreferences } = await import("../src/thunderbird.ts");
+    const prefs = `user_pref("mail.accountmanager.accounts", "account1");
+user_pref("mail.account.account1.server", "server1");
+user_pref("mail.account.account1.identities", "id1");
+user_pref("mail.server.server1.type", "imap");
+user_pref("mail.server.server1.hostname", "imap.example.test");
+user_pref("mail.server.server1.socketType", 3);
+user_pref("mail.server.server1.userName", "owner");
+user_pref("mail.identity.id1.useremail", "owner@example.test");
+user_pref("mail.identity.id1.smtpServer", "smtp1");
+user_pref("mail.smtpserver.smtp1.hostname", "smtp.example.test");
+user_pref("mail.smtpserver.smtp1.try_ssl", 2);
+user_pref("mail.smtpserver.smtp1.port", 587);
+user_pref("malicious", (globalThis.compromised = true));`;
+    const accounts = accountsFromPreferences(prefs);
+    expect(accounts).toHaveLength(1);
+    expect(accounts[0]).toMatchObject({ email: "owner@example.test", imapSecurity: "tls", smtpSecurity: "starttls", smtpPort: 587 });
+    const multi = accountsFromPreferences(prefs.replace('"mail.account.account1.identities", "id1"', '"mail.account.account1.identities", "id1,id2"') + '\nuser_pref("mail.identity.id2.useremail", "alias@example.test");');
+    expect(multi.map(item => item.email)).toEqual(["owner@example.test", "alias@example.test"]);
+    expect((globalThis as Record<string, unknown>).compromised).toBeUndefined();
+  });
 });

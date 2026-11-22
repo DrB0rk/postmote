@@ -36,13 +36,13 @@ try {
 
   New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
   $Target = Join-Path $InstallDir 'postmote.exe'
-  $StagePath = Join-Path $InstallDir ('.postmote-' + [System.Guid]::NewGuid().ToString('N'))
+  $StagePath = Join-Path $InstallDir ('.postmote-' + [System.Guid]::NewGuid().ToString('N') + '.exe')
   Copy-Item -Path $BinaryPath -Destination $StagePath
+  $Version = & $StagePath --version
+  if ($LASTEXITCODE -ne 0) { Stop-Install 'The downloaded app did not start. The existing installation was left untouched.' }
   Move-Item -Path $StagePath -Destination $Target -Force
   $StagePath = $null
   Write-Ok "Installed to $Target"
-  $Version = & $Target --version
-  if ($LASTEXITCODE -ne 0) { Stop-Install 'The downloaded app did not start.' }
   Write-Ok "Ready: $Version"
   if (($env:PATH -split ';') -notcontains $InstallDir) {
     Write-Host "`n  Add this folder to your PATH: $InstallDir" -ForegroundColor DarkGray

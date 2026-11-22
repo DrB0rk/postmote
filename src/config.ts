@@ -6,7 +6,9 @@ const envSchema = z.object({
   POSTMOTE_BIND: z.literal("127.0.0.1").default("127.0.0.1"),
   POSTMOTE_PORT: z.coerce.number().int().min(1).max(65535).default(3145),
   POSTMOTE_DATA_DIR: z.string().min(1).refine((value) => isAbsolute(value) || value.startsWith("~/"), "POSTMOTE_DATA_DIR must be an absolute path or start with ~/.").optional(),
+  POSTMOTE_MASTER_KEY_FILE: z.string().min(1).refine((value) => isAbsolute(value) || value.startsWith("~/"), "POSTMOTE_MASTER_KEY_FILE must be an absolute path or start with ~/.").optional(),
   POSTMOTE_DEFAULT_POLL_SECONDS: z.coerce.number().int().min(60).max(3600).default(120),
+  POSTMOTE_MAX_SENDS_PER_HOUR: z.coerce.number().int().min(1).max(1000).default(30),
   POSTMOTE_LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info"),
 });
 
@@ -14,7 +16,9 @@ export type Config = {
   bind: "127.0.0.1";
   port: number;
   dataDir: string;
+  masterKeyFile: string;
   pollSeconds: number;
+  maxSendsPerHour: number;
   logLevel: "debug" | "info" | "warn" | "error";
 };
 
@@ -27,8 +31,10 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): Config {
     bind: parsed.POSTMOTE_BIND,
     port: parsed.POSTMOTE_PORT,
     dataDir,
+    masterKeyFile: parsed.POSTMOTE_MASTER_KEY_FILE?.startsWith("~/") ? join(homedir(), parsed.POSTMOTE_MASTER_KEY_FILE.slice(2)) : parsed.POSTMOTE_MASTER_KEY_FILE ?? join(dataDir,"master.key"),
     pollSeconds: parsed.POSTMOTE_DEFAULT_POLL_SECONDS,
     logLevel: parsed.POSTMOTE_LOG_LEVEL,
+    maxSendsPerHour: parsed.POSTMOTE_MAX_SENDS_PER_HOUR,
   };
 }
 

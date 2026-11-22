@@ -1,6 +1,6 @@
 {
   "name": "postmote",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": false,
   "type": "module",
   "description": "A local-first mailbox bridge for coding agents",
@@ -14,13 +14,15 @@
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.3.1",
-    "hono": "^4.10.4",
+    "hono": "^4.13.20",
     "imapflow": "2.9.0",
+    "mailparser": "^3.15.0",
     "nodemailer": "10.2.1",
     "zod": "^4.1.12"
   },
   "devDependencies": {
     "@types/bun": "^1.2.22",
+    "@types/mailparser": "^3.9.0",
     "@types/node": "^24.7.2",
     "typescript": "^5.9.3"
   }

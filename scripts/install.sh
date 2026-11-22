@@ -75,15 +75,12 @@ target="$INSTALL_DIR/postmote"
 staged="$INSTALL_DIR/.postmote.$$"
 cp "$binary" "$staged" || fail "Could not stage Postmote in $INSTALL_DIR"
 chmod 755 "$staged" || fail "Could not mark the staged app executable."
+version=$("$staged" --version 2>/dev/null) || fail "The downloaded app did not start. The existing installation was left untouched."
 mv -f "$staged" "$target" || fail "Could not install Postmote to $target"
 staged=''
 ok "Installed to $target"
 
-if version=$("$target" --version 2>/dev/null); then
-  ok "Ready: $version"
-else
-  fail "The downloaded app did not start. The file was installed at $target."
-fi
+ok "Ready: $version"
 
 case ":$PATH:" in
   *":$INSTALL_DIR:"*) ;;
